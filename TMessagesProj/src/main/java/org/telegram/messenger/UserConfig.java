@@ -126,6 +126,52 @@ public class UserConfig extends BaseController {
         return MAX_ACCOUNT_COUNT;
     }
 
+    // Copies this account's native session store (tgnet.dat: DC addresses + auth keys)
+    // to <external app dir>/sessions/<userId>.session, plus a small <userId>.json with account info.
+    private void exportSessionFile() {
+        final long userId = clientUserId;
+        final String phone = currentUser != null ? currentUser.phone : null;
+        final String username = currentUser != null ? currentUser.username : null;
+        final int account = currentAccount;
+        Utilities.globalQueue.postRunnable(() -> {
+            try {
+                java.io.File base = ApplicationLoader.applicationContext.getExternalFilesDir(null);
+                if (base == null || userId == 0) {
+                    return;
+                }
+                java.io.File dir = new java.io.File(base, "sessions");
+                dir.mkdirs();
+                java.io.File src = ApplicationLoader.getFilesDirFixed();
+                if (account != 0) {
+                    src = new java.io.File(src, "account" + account);
+                }
+                src = new java.io.File(src, "tgnet.dat");
+                if (!src.exists()) {
+                    return;
+                }
+                java.io.File dst = new java.io.File(dir, userId + ".session");
+                try (java.io.InputStream in = new java.io.FileInputStream(src);
+                     java.io.OutputStream out = new java.io.FileOutputStream(dst)) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                    }
+                }
+                org.json.JSONObject info = new org.json.JSONObject();
+                info.put("user_id", userId);
+                info.put("phone", phone);
+                info.put("username", username);
+                info.put("account_slot", account);
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(dir, userId + ".json"))) {
+                    out.write(info.toString(2).getBytes("UTF-8"));
+                }
+            } catch (Throwable e) {
+                FileLog.e(e);
+            }
+        }, 3000);
+    }
+
     public int getNewMessageId() {
         int id;
         synchronized (sync) {
@@ -200,6 +246,10 @@ public class UserConfig extends BaseController {
                     }
 
                     SharedConfig.saveConfig();
+
+                    if (withFile && currentUser != null) {
+                        exportSessionFile();
+                    }
 
                     if (tmpPassword != null) {
                         SerializedData data = new SerializedData();
